@@ -1,0 +1,6 @@
+# Mount the device when added
+KERNEL=="sd[a-z][0-9]*", ACTION=="add",	RUN+="/usr/bin/systemctl restart ntfs-automount@%k.service"
+
+# Clean up mount point after device removal
+KERNEL=="sd[a-z][0-9]*", ACTION=="remove",	RUN+="/usr/bin/systemctl restart ntfs-automount@%k.service"
+

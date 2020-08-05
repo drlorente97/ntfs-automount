@@ -1,0 +1,143 @@
+#!/bin/sh
+
+# ntfs-automount (Automount NTFS drives using an udev rule)
+# Copyright (C) 2019  Angel Perez <near1297@nauta.cu>
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
+#
+# General declarations
+#
+
+# Directory to use for mounting the devices
+mdir='/media'
+# Default options to use for mounting
+mopts='errors=remount-ro,relatime,utf8,user'
+
+#
+# Init checks
+#
+
+# Check root permissions
+[[ $EUID != 0 ]] && {
+    echo "This tool requires root permissions"
+    exit 1
+}
+shopt -s nullglob
+
+log() {
+    logger -st "ntfs-automount" "$*"
+}
+
+# Check provided device name
+if ! [ "$1" ]; then
+    log "missing arguments! a device name must be provided"
+    exit 1
+else
+    dev=/dev/${1##*/}  
+fi
+
+#
+# Main code
+#
+
+# Check if device exists and is a block device
+if ! lsblk | grep -qe ${dev##*/}; then
+	# If not but mounted, umount it
+    if grep /etc/mtab -qe "^$dev"; then
+		log "$dev device removed, umounting and cleaning /media"
+		if umount "$dev"; then
+	    		exitcode=0
+			else
+	    		log "Error umounting $dev errcode:$?"
+	    		exitcode=1
+		fi
+    else
+		log "Device doesn't exist anymore or is not a block device: $dev"
+		exitcode=0
+    fi
+    # Set for mountpoint cleanup
+    cleanup=1
+else
+	# Check if device is already mounted
+	if grep /etc/mtab -qe "^$dev"; then
+		log "$dev already mounted, automount won't manage it"
+		exitcode=0
+	fi
+fi
+
+# Cleanup mount point if needed and exit if nothing to do
+if [ "$cleanup" ] || [ "${1##*/}" = "sda1" ]; then
+	log "Cleanup mount point dir"
+	for dir in "$mdir"/*; do
+		[ -d "$dir" ] && ! mountpoint -q "$dir" && rmdir "$dir"
+	done
+fi
+if [ "$exitcode" ]; then
+	exit $exitcode
+fi
+
+# Load additional info for the block device
+eval $(blkid -po export $dev)
+
+# Check /etc/fstab for an entry corresponding to the device
+[ "$UUID" ] && fstab=$(grep /etc/fstab -e "${UUID/\-/\\\-}") || \
+[ "$LABEL" ] && fstab=$(grep /etc/fstab -e "${LABEL/\-/\\\-}") || \
+fstab=$(grep /etc/fstab -e "^[ \t]*$dev[ \t]")
+
+# Don't manage devices that are already in fstab
+if [ "$fstab" ]; then
+    log "$dev already in /etc/fstab, automount won't manage it: ${fstab/[ \t][ \t]/ }"
+    exit 0
+fi
+
+# Don't manage device that has special flags
+if ! [ "$PART_ENTRY_FLAGS" = "" ]; then
+	log "$dev has special flags, automount won't manage it"
+	exit 0
+fi
+
+# Only manage ntfs devices
+case $TYPE in
+    ntfs) 
+	mopts="$mopts,flush"
+	hash ntfs-3g && mtype="ntfs-3g"
+	;;
+    *)
+    log "$dev is not an NTFS device, automount won't manage it"
+	exit 0
+	;;
+esac
+
+# Set directory name
+dir="${mdir}/${LABEL:-${dev##*/}}"
+
+# Verifiy device integrity
+log "verifying $dev integrity"
+ntfsfix "$dev"
+
+# Mount device
+log "mounting device $dev in $dir"
+mkdir -p "$dir"
+if mount -t "${mtype:-auto}" -o "$mopts" "$dev" "$dir"; then
+    # Notify
+    username="$(ps au | awk '$11 ~ /^xinit/ { print $1; exit }')"
+    [[ "$username" ]] && DISPLAY=:0 runuser -u "$username" xdg-open "$dir"
+    log "Device successfully mounted: $dir"
+    exit 0
+else
+    log "Mount error: $?"
+    rmdir "$dir"
+    exit 1
+fi
