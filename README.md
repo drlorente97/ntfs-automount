@@ -1,6 +1,6 @@
-# AUR-Repo
+# ntfs-automount
 
-Personal repo for my AUR packages
+Automount NTFS drives on boot by using an udev rule
 
 ## License
 
