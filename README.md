@@ -2,9 +2,9 @@
 
 Automount NTFS drives on boot by using an udev rule
 
-## Build
+## Install
 
-This source is intended to be packaged
+This source is intended to be packaged and not manualy installed, but it works :)
 
 ```
 make install
